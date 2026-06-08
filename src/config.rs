@@ -49,7 +49,7 @@ impl Config {
             .unwrap_or_else(|_| "https://testnet.binance.vision".to_string());
         
         let ws_url = env::var("BINANCE_WS_URL")
-            .unwrap_or_else(|_| "wss://testnet.binance.vision/stream".to_string());
+            .unwrap_or_else(|_| "wss://stream.testnet.binance.vision/stream".to_string());
 
         let fee_rate = env::var("TRADING_FEE_RATE")
             .ok()
