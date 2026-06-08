@@ -23,7 +23,7 @@ async fn main() {
         )
         .init();
 
-    info!("Initializing Binance Spot Testnet Real-time Triangular Arbitrage Bot...");
+    info!("Initializing Binance Spot Real-time Triangular Arbitrage Bot...");
 
     // 2. Load configuration from environment variables
     let mut config = Config::load_from_env();
@@ -70,7 +70,7 @@ async fn main() {
     // 5. Initialize the execution engine (performs time sync and loads lot sizes / precision rules)
     let execution_engine = Arc::new(ExecutionEngine::new(&config).await);
 
-    // 6. Spawn the WebSocket data ingestion task
+    // 6. Spawn the WebSocket data ingestion task (TRẢ LẠI LUỒNG WEBSOCKET CHUẨN)
     let ws_url = config.ws_url.clone();
     let symbols_clone = unique_symbols.clone();
     let cache_clone = cache.clone();
@@ -85,8 +85,10 @@ async fn main() {
     let fee_rate = config.fee_rate;
     let min_profit_rate = config.min_profit_rate;
     
-    // Binance Spot Testnet minimum notional limit is usually 10 USDT
-    let min_usdt_order = dec!(10.0);
+    // Trong src/main.rs - Sửa lại mức test nhỏ hơn
+    let min_usdt_order = dec!(1.0);
+
+    let mut last_debug_print = 0;
 
     // 7. Core calculation and decision loop
     loop {
@@ -104,8 +106,28 @@ async fn main() {
             cache_lock.books.clone()
         };
 
+        let now_sec = chrono::Utc::now().timestamp();
+        let should_debug = now_sec - last_debug_print >= 10;
+        if should_debug {
+            last_debug_print = now_sec;
+        }
+
         // Scan all defined triangles
-        for triangle in &triangles {
+        for (idx, triangle) in triangles.iter().enumerate() {
+            let has_leg1 = current_books.contains_key(&triangle.leg1.symbol);
+            let has_leg2 = current_books.contains_key(&triangle.leg2.symbol);
+            let has_leg3 = current_books.contains_key(&triangle.leg3.symbol);
+
+            if should_debug && (idx == 0 || triangle.name == "USDT->KNC->BTC->USDT") {
+                info!(
+                    "DEBUG CACHE - Path: {} | Leg1={}({}), Leg2={}({}), Leg3={}({})", 
+                    triangle.name,
+                    triangle.leg1.symbol, has_leg1,
+                    triangle.leg2.symbol, has_leg2,
+                    triangle.leg3.symbol, has_leg3
+                );
+            }
+
             if let Some(opportunity) = arbitrage::find_arbitrage_opportunity(
                 triangle,
                 &current_books,
@@ -125,18 +147,18 @@ async fn main() {
                 // Acquire the execution lock
                 is_executing.store(true, Ordering::Relaxed);
 
-                // Spawn the execution in a separate async thread so as not to block the calculation loop
-                let engine = execution_engine.clone();
+                // ĐƯA ĐOẠN MONITOR ONLY VÀO ĐÂY ĐỂ CHỈ THEO DÕI, KHÔNG ĐẶT LỆNH THẬT
                 let triangle_clone = triangle.clone();
+                let opportunity_clone = opportunity.clone();
                 let is_executing_clone = is_executing.clone();
 
                 tokio::spawn(async move {
-                    if let Err(e) = engine.execute_triangular_trade(&triangle_clone, &opportunity).await {
-                        error!("[TRADE FAILURE] Execution of triangle failed: {}", e);
-                    } else {
-                        info!("[TRADE SUCCESS] Successfully executed triangular trade!");
-                    }
-                    // Release the execution lock
+                    info!(
+                        "[MONITOR ONLY] Tìm thấy cặp ngách tiềm năng cực ngon: {} | Lãi dự kiến sau phí: {:.4}%", 
+                        triangle_clone.name, 
+                        opportunity_clone.expected_profit_pct.normalize()
+                    );
+                    // Giải phóng lock ngay lập tức để tiếp tục vòng lặp lắng nghe
                     is_executing_clone.store(false, Ordering::Relaxed);
                 });
             }

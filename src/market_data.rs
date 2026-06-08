@@ -49,6 +49,8 @@ impl DepthPayload {
             let quantity = raw[1].parse::<Decimal>()?;
             bids.push(OrderBookLevel { price, quantity });
         }
+        // Ensure bids are sorted descending (highest bid price first)
+        bids.sort_by(|a, b| b.price.cmp(&a.price));
 
         let mut asks = Vec::with_capacity(self.asks.len());
         for raw in &self.asks {
@@ -56,6 +58,8 @@ impl DepthPayload {
             let quantity = raw[1].parse::<Decimal>()?;
             asks.push(OrderBookLevel { price, quantity });
         }
+        // Ensure asks are sorted ascending (lowest ask price first)
+        asks.sort_by(|a, b| a.price.cmp(&b.price));
 
         Ok(OrderBook {
             bids,

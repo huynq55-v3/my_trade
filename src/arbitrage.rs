@@ -187,13 +187,16 @@ pub fn calculate_max_usdt_capacity(
         TradeDirection::Sell => {
             // We sell A. Max A we can sell is sum of bid quantities on Leg 2.
             let a_max: Decimal = book2.bids.iter().map(|l| l.quantity).sum();
-            reverse_simulate_leg(a_max, triangle.leg1.direction, book1, fee_rate)?
+            reverse_simulate_leg(a_max, triangle.leg1.direction, book1, fee_rate).unwrap_or(Decimal::MAX)
         }
         TradeDirection::Buy => {
             // We buy B. Max B we can buy is sum of ask quantities on Leg 2.
             let b_max: Decimal = book2.asks.iter().map(|l| l.quantity).sum();
-            let a_needed = reverse_simulate_leg(b_max, triangle.leg2.direction, book2, fee_rate)?;
-            reverse_simulate_leg(a_needed, triangle.leg1.direction, book1, fee_rate)?
+            if let Some(a_needed) = reverse_simulate_leg(b_max, triangle.leg2.direction, book2, fee_rate) {
+                reverse_simulate_leg(a_needed, triangle.leg1.direction, book1, fee_rate).unwrap_or(Decimal::MAX)
+            } else {
+                Decimal::MAX
+            }
         }
     };
 
@@ -201,8 +204,11 @@ pub fn calculate_max_usdt_capacity(
     let v3_max = {
         // We sell B. Max B we can sell is sum of bid quantities on Leg 3.
         let b_max: Decimal = book3.bids.iter().map(|l| l.quantity).sum();
-        let a_needed = reverse_simulate_leg(b_max, triangle.leg2.direction, book2, fee_rate)?;
-        reverse_simulate_leg(a_needed, triangle.leg1.direction, book1, fee_rate)?
+        if let Some(a_needed) = reverse_simulate_leg(b_max, triangle.leg2.direction, book2, fee_rate) {
+            reverse_simulate_leg(a_needed, triangle.leg1.direction, book1, fee_rate).unwrap_or(Decimal::MAX)
+        } else {
+            Decimal::MAX
+        }
     };
 
     let cap = v1_max.min(v2_max).min(v3_max);
@@ -375,6 +381,71 @@ mod tests {
         // Desired output from SELL: 98.901 net quote asset
         let input2 = reverse_simulate_leg(dec!(98.901), TradeDirection::Sell, &sell_book, fee).unwrap();
         assert_eq!(input2, dec!(1.0)); // Should require selling 1.0 base asset
+    }
+
+    #[test]
+    fn test_calculate_max_usdt_capacity() {
+        use crate::config::Leg;
+
+        let triangle = Triangle {
+            name: "USDT->A->B->USDT".to_string(),
+            leg1: Leg {
+                symbol: "AUSDT".to_string(),
+                base_asset: "A".to_string(),
+                quote_asset: "USDT".to_string(),
+                direction: TradeDirection::Buy,
+            },
+            leg2: Leg {
+                symbol: "AB".to_string(),
+                base_asset: "A".to_string(),
+                quote_asset: "B".to_string(),
+                direction: TradeDirection::Sell,
+            },
+            leg3: Leg {
+                symbol: "BUSDT".to_string(),
+                base_asset: "B".to_string(),
+                quote_asset: "USDT".to_string(),
+                direction: TradeDirection::Sell,
+            },
+        };
+
+        let mut books = HashMap::new();
+        // Leg 1: Buy A/USDT.
+        // Asks: price 100, qty 1; price 101, qty 2. Max cost = 1*100 + 2*101 = 302.
+        books.insert("AUSDT".to_string(), mock_buy_book());
+
+        // Leg 2: Sell A/B.
+        // Bids: price 0.1, qty 0.5. (We can sell up to 0.5 A)
+        books.insert("AB".to_string(), OrderBook {
+            bids: vec![
+                OrderBookLevel {
+                    price: dec!(0.1),
+                    quantity: dec!(0.5),
+                }
+            ],
+            asks: vec![],
+            last_update_id: 1,
+        });
+
+        // Leg 3: Sell B/USDT.
+        // Bids: price 1000, qty 10.0 (very deep book, would cause None in old code)
+        books.insert("BUSDT".to_string(), OrderBook {
+            bids: vec![
+                OrderBookLevel {
+                    price: dec!(1000.0),
+                    quantity: dec!(10.0),
+                }
+            ],
+            asks: vec![],
+            last_update_id: 1,
+        });
+
+        let fee_rate = dec!(0.001);
+        let cap = calculate_max_usdt_capacity(&triangle, &books, fee_rate);
+        assert!(cap.is_some(), "Capacity should not be None");
+        let cap_val = cap.unwrap();
+        assert!(cap_val < dec!(51.0));
+        assert!(cap_val > dec!(50.0));
     }
 }
 
