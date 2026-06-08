@@ -6,6 +6,7 @@ use tokio::sync::Notify;
 use tokio::time::{sleep, Duration};
 use futures_util::StreamExt;
 use tracing::{info, error};
+use crate::config::Triangle;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct OrderBookLevel {
@@ -146,3 +147,117 @@ pub async fn start_websocket_ingestion(
         sleep(Duration::from_secs(5)).await;
     }
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SymbolMetadata {
+    symbol: String,
+    status: String,
+    base_asset: String,
+    quote_asset: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExchangeInfoSymbolsOnly {
+    symbols: Vec<SymbolMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Ticker24hr {
+    symbol: String,
+    quote_volume: String,
+}
+
+/// Dynamic whitelisting discovery: queries 24h ticker info and exchange symbols
+/// to dynamically locate active Altcoins with both Alt/USDT and Alt/BTC trading pairs,
+/// filtering by 24h quote volume limits.
+pub async fn discover_triangles(
+    rest_url: &str,
+    min_vol: Decimal,
+    max_vol: Decimal,
+) -> Result<Vec<Triangle>, reqwest::Error> {
+    use crate::config::{Triangle, Leg, TradeDirection};
+
+    let client = reqwest::Client::new();
+    
+    // 1. Fetch exchange info to get active symbols & mappings
+    let info_url = format!("{}/api/v3/exchangeInfo", rest_url);
+    let info_res = client.get(&info_url)
+        .send()
+        .await?
+        .json::<ExchangeInfoSymbolsOnly>()
+        .await?;
+    
+    // 2. Fetch 24h tickers to check trading volumes
+    let ticker_url = format!("{}/api/v3/ticker/24hr", rest_url);
+    let ticker_res = client.get(&ticker_url)
+        .send()
+        .await?
+        .json::<Vec<Ticker24hr>>()
+        .await?;
+    
+    // Create map of symbol -> 24h quoteVolume
+    let mut quote_volumes = HashMap::new();
+    for ticker in ticker_res {
+        if let Ok(vol) = ticker.quote_volume.parse::<Decimal>() {
+            quote_volumes.insert(ticker.symbol, vol);
+        }
+    }
+    
+    // Create map of symbol -> metadata
+    let mut symbol_map = HashMap::new();
+    for sym in info_res.symbols {
+        if sym.status == "TRADING" {
+            symbol_map.insert(sym.symbol.clone(), sym);
+        }
+    }
+    
+    // First, let's identify all active A/USDT symbols matching volume filter
+    let mut altcoins = Vec::new();
+    for (sym_name, metadata) in &symbol_map {
+        if metadata.quote_asset == "USDT" && metadata.base_asset != "BTC" {
+            if let Some(&vol) = quote_volumes.get(sym_name) {
+                if vol >= min_vol && vol <= max_vol {
+                    altcoins.push(metadata.base_asset.clone());
+                }
+            }
+        }
+    }
+    
+    let mut triangles = Vec::new();
+    
+    // For each whitelisted altcoin, check if Alt/BTC exists
+    for altcoin in altcoins {
+        let alt_usdt_symbol = format!("{}USDT", altcoin);
+        let alt_btc_symbol = format!("{}BTC", altcoin);
+        
+        if symbol_map.contains_key(&alt_usdt_symbol) && symbol_map.contains_key(&alt_btc_symbol) {
+            triangles.push(Triangle {
+                name: format!("USDT->{}->BTC->USDT", altcoin),
+                leg1: Leg {
+                    symbol: alt_usdt_symbol,
+                    base_asset: altcoin.clone(),
+                    quote_asset: "USDT".to_string(),
+                    direction: TradeDirection::Buy,
+                },
+                leg2: Leg {
+                    symbol: alt_btc_symbol,
+                    base_asset: altcoin.clone(),
+                    quote_asset: "BTC".to_string(),
+                    direction: TradeDirection::Sell,
+                },
+                leg3: Leg {
+                    symbol: "BTCUSDT".to_string(),
+                    base_asset: "BTC".to_string(),
+                    quote_asset: "USDT".to_string(),
+                    direction: TradeDirection::Sell,
+                },
+            });
+        }
+    }
+    
+    Ok(triangles)
+}
+

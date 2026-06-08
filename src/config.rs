@@ -33,6 +33,8 @@ pub struct Config {
     pub ws_url: String,
     pub fee_rate: Decimal,           // e.g., 0.001 for 0.1% fee
     pub min_profit_rate: Decimal,    // e.g., 0.002 for 0.2% net profit
+    pub min_24h_volume: Decimal,     // e.g., 50,000 USDT
+    pub max_24h_volume: Decimal,     // e.g., 500,000 USDT
     pub triangles: Vec<Triangle>,
 }
 
@@ -61,114 +63,15 @@ impl Config {
             .and_then(|val| val.parse::<Decimal>().ok())
             .unwrap_or(dec!(0.002)); // Default 0.2%
 
-        // Define our target triangles.
-        // Format: USDT -> Target_Coin_A -> Target_Coin_B -> USDT
-        // Standard symbols on Binance Testnet:
-        // A/USDT, B/USDT, and either A/B or B/A.
-        // Let's create the following list of triangles:
-        // 1. USDT -> LTC -> BTC -> USDT
-        //    Leg 1: Buy LTCUSDT (USDT -> LTC)
-        //    Leg 2: Sell LTCBTC (LTC -> BTC)
-        //    Leg 3: Sell BTCUSDT (BTC -> USDT)
-        // 2. USDT -> ETH -> BTC -> USDT
-        //    Leg 1: Buy ETHUSDT (USDT -> ETH)
-        //    Leg 2: Sell ETHBTC (ETH -> BTC)
-        //    Leg 3: Sell BTCUSDT (BTC -> USDT)
-        // 3. USDT -> ADA -> BTC -> USDT
-        //    Leg 1: Buy ADAUSDT (USDT -> ADA)
-        //    Leg 2: Sell ADABTC (ADA -> BTC)
-        //    Leg 3: Sell BTCUSDT (BTC -> USDT)
-        // 4. USDT -> XRP -> BTC -> USDT
-        //    Leg 1: Buy XRPUSDT (USDT -> XRP)
-        //    Leg 2: Sell XRPBTC (XRP -> BTC)
-        //    Leg 3: Sell BTCUSDT (BTC -> USDT)
-        
-        let triangles = vec![
-            Triangle {
-                name: "USDT->LTC->BTC->USDT".to_string(),
-                leg1: Leg {
-                    symbol: "LTCUSDT".to_string(),
-                    base_asset: "LTC".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Buy,
-                },
-                leg2: Leg {
-                    symbol: "LTCBTC".to_string(),
-                    base_asset: "LTC".to_string(),
-                    quote_asset: "BTC".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-                leg3: Leg {
-                    symbol: "BTCUSDT".to_string(),
-                    base_asset: "BTC".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-            },
-            Triangle {
-                name: "USDT->ETH->BTC->USDT".to_string(),
-                leg1: Leg {
-                    symbol: "ETHUSDT".to_string(),
-                    base_asset: "ETH".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Buy,
-                },
-                leg2: Leg {
-                    symbol: "ETHBTC".to_string(),
-                    base_asset: "ETH".to_string(),
-                    quote_asset: "BTC".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-                leg3: Leg {
-                    symbol: "BTCUSDT".to_string(),
-                    base_asset: "BTC".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-            },
-            Triangle {
-                name: "USDT->ADA->BTC->USDT".to_string(),
-                leg1: Leg {
-                    symbol: "ADAUSDT".to_string(),
-                    base_asset: "ADA".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Buy,
-                },
-                leg2: Leg {
-                    symbol: "ADABTC".to_string(),
-                    base_asset: "ADA".to_string(),
-                    quote_asset: "BTC".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-                leg3: Leg {
-                    symbol: "BTCUSDT".to_string(),
-                    base_asset: "BTC".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-            },
-            Triangle {
-                name: "USDT->XRP->BTC->USDT".to_string(),
-                leg1: Leg {
-                    symbol: "XRPUSDT".to_string(),
-                    base_asset: "XRP".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Buy,
-                },
-                leg2: Leg {
-                    symbol: "XRPBTC".to_string(),
-                    base_asset: "XRP".to_string(),
-                    quote_asset: "BTC".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-                leg3: Leg {
-                    symbol: "BTCUSDT".to_string(),
-                    base_asset: "BTC".to_string(),
-                    quote_asset: "USDT".to_string(),
-                    direction: TradeDirection::Sell,
-                },
-            },
-        ];
+        let min_24h_volume = env::var("MIN_24H_VOLUME")
+            .ok()
+            .and_then(|val| val.parse::<Decimal>().ok())
+            .unwrap_or(dec!(50000.0)); // Default $50,000
+
+        let max_24h_volume = env::var("MAX_24H_VOLUME")
+            .ok()
+            .and_then(|val| val.parse::<Decimal>().ok())
+            .unwrap_or(dec!(500000.0)); // Default $500,000
 
         Self {
             api_key,
@@ -177,7 +80,9 @@ impl Config {
             ws_url,
             fee_rate,
             min_profit_rate,
-            triangles,
+            min_24h_volume,
+            max_24h_volume,
+            triangles: Vec::new(),
         }
     }
 

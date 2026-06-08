@@ -26,8 +26,37 @@ async fn main() {
     info!("Initializing Binance Spot Testnet Real-time Triangular Arbitrage Bot...");
 
     // 2. Load configuration from environment variables
-    let config = Config::load_from_env();
-    info!("Configuration loaded. Active triangles: {}", config.triangles.len());
+    let mut config = Config::load_from_env();
+    
+    // 2.5 Discover target niche paths dynamically based on 24h quote trading volume
+    info!(
+        "Discovering target niche triangles (24h Volume limit: {} to {} USDT)...",
+        config.min_24h_volume.normalize(), config.max_24h_volume.normalize()
+    );
+    let discovered_triangles = market_data::discover_triangles(
+        &config.rest_url,
+        config.min_24h_volume,
+        config.max_24h_volume,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        panic!("Failed to dynamically discover triangular trading paths: {:?}", e);
+    });
+
+    if discovered_triangles.is_empty() {
+        error!("No trading paths discovered matching the volume criteria. Exiting bot.");
+        return;
+    }
+
+    info!(
+        "Successfully whitelisted {} triangular paths:",
+        discovered_triangles.len()
+    );
+    for t in &discovered_triangles {
+        info!("  - {}", t.name);
+    }
+    
+    config.triangles = discovered_triangles;
 
     // 3. Initialize thread-safe cache and notification channels
     let cache = Arc::new(RwLock::new(OrderBookCache::default()));
